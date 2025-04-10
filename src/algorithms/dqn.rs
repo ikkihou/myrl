@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::os::macos::raw::stat;
 
 use crate::agent::Agent;
 use crate::environment::Environment;
@@ -7,10 +8,12 @@ use crate::policy::Policy;
 use crate::utils::ToTensor;
 
 use rand::seq::IndexedRandom;
-use rand::{Rng, rng};
+use rand::{rng, Rng};
 use tch::nn::OptimizerConfig;
-use tch::{Device, nn::Module};
-use tch::{Tensor, nn};
+use tch::Kind;
+use tch::TensorIndexer;
+use tch::{nn, Tensor};
+use tch::{nn::Module, Device};
 
 const MAX_REPLAY_BUFFER: usize = 10000;
 pub struct DqnAgent<E: Environment> {
@@ -46,12 +49,12 @@ where
         let target_net = MLP::new(vs2, input_dim, output_dim);
 
         let opt = nn::Adam::default()
-            .build(policy_net.var_store(), 1e-4)
+            .build(policy_net.var_store(), 1e-3)
             .unwrap();
 
         DqnAgent {
-            policy_net: policy_net,
-            target_net: target_net,
+            policy_net,
+            target_net,
             replay_buffer: VecDeque::new(),
             gamma,
             epsilon,
@@ -136,13 +139,12 @@ where
             .gather(1, &action_batch, false);
 
         // Compute target Q values (no gradient)
-        let next_q_values = tch::no_grad(|| {
-            self.target_net
-                .model
-                .forward(&next_state_batch)
-                .max_dim(1, false)
-                .0
-        });
+        let next_q_values = self
+            .target_net
+            .model
+            .forward(&next_state_batch)
+            .max_dim(1, false)
+            .0;
 
         let expected_q_values: Tensor =
             &reward_batch + self.gamma * next_q_values.unsqueeze(1) * (1.0 - done_batch);
@@ -173,12 +175,9 @@ where
             let action = Rng::random_range(&mut rng, 0..self.action_dim as i64);
             E::Action::from(action)
         } else {
-            let state = &state;
+            let state = &state.to_tensor();
             let _no_grad_gurad = tch::no_grad_guard();
-            let action_tensor = self
-                .policy_net
-                .model
-                .forward(&state.to_tensor().to(self.device));
+            let action_tensor = self.policy_net.model.forward(&state.to(self.device));
             let action: i64 = action_tensor.argmax(1, false).int64_value(&[0]);
             E::Action::from(action)
         }
