@@ -1,0 +1,12 @@
+[package]
+name = "myrl"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# ndarray = "0.15"                                   # 数值计算
+# ndarray-rand = "0.15"                              # 随机数生成
+tch = "0.15.0"                                     # Torch绑定(如需PyTorch后端)
+rand = "0.9"                                       # 随机数生成
+serde = { version = "1.0", features = ["derive"] } # 序列化
+plotters = "0.3"
