@@ -65,7 +65,7 @@ where
     fn update_policy_network(&mut self) {
         use tch::Kind;
 
-        // sampling minibatch
+        // Sample minibatch
         let minibatch: Vec<_> = self
             .replay_buffer
             .iter()
@@ -89,7 +89,7 @@ where
             dones.push(d);
         }
 
-        // 转 Tensor
+        // Convert to tensors
         let state_batch = Tensor::stack(
             &states
                 .into_iter()
@@ -99,8 +99,6 @@ where
         )
         .squeeze_dim(1)
         .to(self.device);
-        // println!("state_batch shape: {:?}", state_batch.dim());
-        // println!("{:?}", state_batch);
 
         let next_state_batch = Tensor::stack(
             &next_states
@@ -111,72 +109,55 @@ where
         )
         .squeeze_dim(1)
         .to(self.device);
-        // println!("next_state_batch shape: {:?}", next_state_batch.dim());
-        // println!("{:?}", next_state_batch);
 
         let action_batch =
             Tensor::from_slice(&actions.into_iter().map(|a| a.into()).collect::<Vec<_>>())
                 .to_device(self.device)
                 .unsqueeze(1);
-        // println!("action_batch shape: {:?}", action_batch.dim());
-        // println!("{:?}", action_batch);
 
         let reward_batch = Tensor::from_slice(&rewards)
             .to_device(self.device)
             .unsqueeze(1);
-        // println!("reward_batch shape: {:?}", reward_batch.dim());
-        // println!("{:?}", reward_batch);
 
         let done_batch = Tensor::from_slice(
             &dones
                 .iter()
-                .map(|&d| if d { 0.0 } else { 1.0 })
+                .map(|&d| if d { 1.0 } else { 0.0 })
                 .collect::<Vec<_>>(),
         )
         .to_device(self.device)
         .unsqueeze(1);
-        // println!("done_batch shape: {:?}", done_batch.dim());
-        // println!("{:?}", done_batch);
 
-        // current q values
+        // Compute current Q values
         let q_values = self
             .policy_net
             .model
             .forward(&state_batch)
             .gather(1, &action_batch, false);
 
-        // target q values
-        let next_q_values = self
-            .target_net
-            .model
-            .forward(&next_state_batch)
-            .max_dim(1, false)
-            .0; // Extract the tensor from the tuple
-        let expected_q_values: Tensor =
-            &reward_batch + self.gamma * next_q_values * (1 - done_batch);
+        // Compute target Q values (no gradient)
+        let next_q_values = tch::no_grad(|| {
+            self.target_net
+                .model
+                .forward(&next_state_batch)
+                .max_dim(1, false)
+                .0
+        });
 
+        let expected_q_values: Tensor =
+            &reward_batch + self.gamma * next_q_values.unsqueeze(1) * (1.0 - done_batch);
+
+        // Compute loss
         let loss = (q_values - expected_q_values.detach())
-            .pow(&Tensor::from(2))
+            .pow_tensor_scalar(2.0)
             .mean(Kind::Float);
 
         self.optimizer.backward_step(&loss);
     }
 
     fn update_target_network(&mut self) {
-        use tch::no_grad;
-
-        let policy_vars = self.policy_net.var_store().variables();
-        let target_vars = self.target_net.var_store().variables();
-
-        no_grad(|| {
-            for (name, mut target_var) in target_vars {
-                if let Some(policy_var) = policy_vars.get(&name) {
-                    // detach + move to same device just in case
-                    let detached = policy_var.detach().to_device(target_var.device());
-                    target_var.copy_(&detached);
-                }
-            }
-        });
+        let policy_state = self.policy_net.var_store();
+        self.target_net.var_store.copy(policy_state).unwrap();
     }
 }
 
@@ -284,7 +265,7 @@ where
             }
             self.replay_buffer.push_back((
                 state.clone(),
-                action,
+                action.clone(),
                 stepresult.reward.into(),
                 stepresult.next_state.clone(),
                 stepresult.done,

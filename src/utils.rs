@@ -1,4 +1,4 @@
-use tch::{Device, Tensor};
+use tch::Tensor;
 
 pub trait ToTensor {
     fn to_tensor(&self) -> Tensor;

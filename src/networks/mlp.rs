@@ -2,7 +2,7 @@ use tch::{Device, nn};
 
 pub struct MLP {
     pub model: nn::Sequential,
-    var_store: nn::VarStore, // 👈 保存 VarStore 的所有权
+    pub var_store: nn::VarStore, // 👈 保存 VarStore 的所有权
 }
 
 impl MLP {
@@ -11,13 +11,13 @@ impl MLP {
             .add(nn::linear(
                 &vs.root() / "layer1",
                 input_dim.try_into().unwrap(),
-                128,
+                64,
                 Default::default(),
             ))
             .add_fn(|xs| xs.relu())
             .add(nn::linear(
                 &vs.root() / "output",
-                128,
+                64,
                 output_dim.try_into().unwrap(),
                 Default::default(),
             ));
