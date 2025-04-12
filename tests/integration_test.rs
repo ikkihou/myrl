@@ -10,7 +10,7 @@ fn dqn_cart_pole_test() {
     let mut env = CartPole::new();
     let mut agent =
         DqnAgent::<CartPole>::new(env.state_dim(), env.action_space(), 0.99, 0.1, 32, device);
-    agent.train(&mut env, 10, 10, true);
+    agent.train(&mut env, 1000, 10, true);
 }
 
 #[test]
