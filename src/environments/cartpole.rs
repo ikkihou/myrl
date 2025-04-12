@@ -105,7 +105,7 @@ impl Environment for CartPole {
         2 // 0: left, 1: right
     }
 
-    fn state_space(&self) -> usize {
+    fn state_dim(&self) -> usize {
         4 // [x, x_dot, theta, theta_dot]
     }
 }

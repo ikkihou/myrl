@@ -19,5 +19,5 @@ pub trait Environment {
     fn action_space(&self) -> usize;
 
     /// 状态空间维度
-    fn state_space(&self) -> usize;
+    fn state_dim(&self) -> usize;
 }

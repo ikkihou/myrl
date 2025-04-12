@@ -8,12 +8,10 @@ use crate::policy::Policy;
 use crate::utils::ToTensor;
 
 use rand::seq::IndexedRandom;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use tch::nn::OptimizerConfig;
-use tch::Kind;
-use tch::TensorIndexer;
-use tch::{nn, Tensor};
-use tch::{nn::Module, Device};
+use tch::{Device, nn::Module};
+use tch::{Tensor, nn};
 
 const MAX_REPLAY_BUFFER: usize = 10000;
 pub struct DqnAgent<E: Environment> {
@@ -23,7 +21,7 @@ pub struct DqnAgent<E: Environment> {
     gamma: f32,
     epsilon: f32,
     batch_size: usize,
-    action_dim: usize,
+    action_space: usize,
     optimizer: nn::Optimizer,
     device: Device,
 }
@@ -34,19 +32,18 @@ where
     E::Action: Into<i64> + From<i64> + Clone,
 {
     pub fn new(
-        input_dim: usize,
-        output_dim: usize,
+        state_dim: usize,
+        action_space: usize,
         gamma: f32,
         epsilon: f32,
         batch_size: usize,
-        action_dim: usize,
         device: Device,
     ) -> Self {
         let vs1 = nn::VarStore::new(device);
         let vs2 = nn::VarStore::new(device);
 
-        let policy_net = MLP::new(vs1, input_dim, output_dim);
-        let target_net = MLP::new(vs2, input_dim, output_dim);
+        let policy_net = MLP::new(vs1, state_dim, action_space);
+        let target_net = MLP::new(vs2, state_dim, action_space);
 
         let opt = nn::Adam::default()
             .build(policy_net.var_store(), 1e-3)
@@ -59,7 +56,7 @@ where
             gamma,
             epsilon,
             batch_size,
-            action_dim,
+            action_space,
             optimizer: opt,
             device,
         }
@@ -171,21 +168,18 @@ where
     fn select_action(&self, state: &E::State) -> E::Action {
         let mut rng = rng();
         if rand::random::<f32>() < self.epsilon {
-            // 探索
-            let action = Rng::random_range(&mut rng, 0..self.action_dim as i64);
+            let action = Rng::random_range(&mut rng, 0..self.action_space as i64);
+
             E::Action::from(action)
         } else {
-            let state = &state.to_tensor();
+            let state_tensor = &state.to_tensor();
             let _no_grad_gurad = tch::no_grad_guard();
-            let action_tensor = self.policy_net.model.forward(&state.to(self.device));
+            let action_tensor = self.policy_net.model.forward(&state_tensor.to(self.device));
             let action: i64 = action_tensor.argmax(1, false).int64_value(&[0]);
+
             E::Action::from(action)
         }
     }
-
-    // fn explore(&self, state: &E::State) -> E::Action {
-    //     todo!()
-    // }
 }
 
 impl<E: Environment> Agent<E> for DqnAgent<E>
@@ -207,7 +201,6 @@ where
             println!("Episode {episode}: total reward = {reward}");
             all_rewards.push(reward);
 
-            // 更新 target 网络（通常每 fixed_target_update_freq 个 episode 更新一次）
             if episode % target_update_freq == 0 {
                 self.update_target_network();
             }
@@ -215,34 +208,7 @@ where
 
         // plot training rewards along episodes
         if if_plot {
-            use plotters::prelude::*;
-
-            let root = BitMapBackend::new("dqn_training.png", (640, 480)).into_drawing_area();
-            root.fill(&WHITE).unwrap();
-            let mut chart = ChartBuilder::on(&root)
-                .caption("Training Reward", ("sans-serif", 30))
-                .margin(20)
-                .x_label_area_size(30)
-                .y_label_area_size(40)
-                .build_cartesian_2d(
-                    0..all_rewards.len(),
-                    0f32..all_rewards.iter().cloned().fold(0., f32::max),
-                )
-                .unwrap();
-
-            chart.configure_mesh().draw().unwrap();
-
-            chart
-                .draw_series(LineSeries::new(
-                    all_rewards.iter().enumerate().map(|(i, r)| (i, *r)),
-                    &RED,
-                ))
-                .unwrap()
-                .label("Reward")
-                .legend(|(x, y)| PathElement::new([(x, y), (x + 20, y)], RED));
-
-            chart.configure_series_labels().draw().unwrap();
-            println!("Saved training plot to dqn_training.png");
+            crate::utils::plot_rewards(&all_rewards, "dqn_training.png", "Training Reward");
         }
     }
 
@@ -284,8 +250,4 @@ where
 
         total_reward
     }
-
-    // fn evaluate(&self, env: &mut E) -> f32 {
-    //     todo!()
-    // }
 }
