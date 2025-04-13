@@ -8,10 +8,10 @@ use crate::policy::Policy;
 use crate::utils::ToTensor;
 
 use rand::seq::IndexedRandom;
-use rand::{Rng, rng};
+use rand::{rng, Rng};
 use tch::nn::OptimizerConfig;
-use tch::{Device, nn::Module};
-use tch::{Tensor, nn};
+use tch::{nn, Tensor};
+use tch::{nn::Module, Device};
 
 const MAX_REPLAY_BUFFER: usize = 10000;
 pub struct DqnAgent<E: Environment> {
@@ -22,6 +22,7 @@ pub struct DqnAgent<E: Environment> {
     epsilon: f32,
     batch_size: usize,
     action_space: usize,
+    target_update_freq: usize,
     optimizer: nn::Optimizer,
     device: Device,
 }
@@ -37,6 +38,7 @@ where
         gamma: f32,
         epsilon: f32,
         batch_size: usize,
+        target_update_freq: usize,
         device: Device,
     ) -> Self {
         let vs1 = nn::VarStore::new(device);
@@ -57,6 +59,7 @@ where
             epsilon,
             batch_size,
             action_space,
+            target_update_freq,
             optimizer: opt,
             device,
         }
@@ -187,13 +190,7 @@ where
     E::State: Clone + ToTensor,
     E::Action: Into<i64> + From<i64> + Clone,
 {
-    fn train(
-        &mut self,
-        env: &mut E,
-        num_episodes: usize,
-        target_update_freq: usize,
-        if_plot: bool,
-    ) {
+    fn train(&mut self, env: &mut E, num_episodes: usize, if_plot: bool) {
         let mut all_rewards: Vec<f32> = Vec::with_capacity(num_episodes);
 
         for episode in 0..num_episodes {
@@ -201,7 +198,7 @@ where
             println!("Episode {episode}: total reward = {reward}");
             all_rewards.push(reward);
 
-            if episode % target_update_freq == 0 {
+            if episode % self.target_update_freq == 0 {
                 self.update_target_network();
             }
         }

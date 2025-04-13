@@ -1,13 +1,10 @@
-use std::vec;
-
 use crate::agent::Agent;
 use crate::environment::Environment;
 use crate::networks::mlp::MLP;
 use crate::utils::ToTensor;
 
-use serde::de::DeserializeOwned;
 use tch::nn::{Module, OptimizerConfig};
-use tch::{Device, IndexOp, Kind, Tensor, nn};
+use tch::{nn, Device, IndexOp, Kind, Tensor};
 
 pub struct PGAgent<E: Environment> {
     policy_net: MLP,
@@ -105,13 +102,7 @@ where
     E::State: Clone + ToTensor,
     E::Action: Into<i64> + From<i64> + Clone,
 {
-    fn train(
-        &mut self,
-        env: &mut E,
-        num_episodes: usize,
-        _target_update_freq: usize,
-        if_plot: bool,
-    ) {
+    fn train(&mut self, env: &mut E, num_episodes: usize, if_plot: bool) {
         let mut all_rewards: Vec<f32> = Vec::with_capacity(num_episodes);
 
         for episode in 0..num_episodes {
