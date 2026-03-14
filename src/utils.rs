@@ -10,6 +10,18 @@ impl ToTensor for [f32; 4] {
     }
 }
 
+pub fn discount_cumsum(x: &[f32], discount: f32) -> Vec<f32> {
+    let mut result = vec![0.0; x.len()];
+    let mut running_sum = 0.0;
+
+    for (i, &val) in x.iter().enumerate().rev() {
+        running_sum = val + discount * running_sum;
+        result[i] = running_sum;
+    }
+
+    result
+}
+
 pub fn plot_rewards(rewards: &Vec<f32>, filename: &str, title: &str) {
     use plotters::prelude::*;
 

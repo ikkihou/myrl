@@ -1,4 +1,4 @@
-use tch::{Device, nn};
+use tch::{nn, Device};
 
 pub struct MLP {
     pub model: nn::Sequential,
