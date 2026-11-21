@@ -10,19 +10,7 @@ impl ToTensor for [f32; 4] {
     }
 }
 
-pub fn discount_cumsum(x: &[f32], discount: f32) -> Vec<f32> {
-    let mut result = vec![0.0; x.len()];
-    let mut running_sum = 0.0;
-
-    for (i, &val) in x.iter().enumerate().rev() {
-        running_sum = val + discount * running_sum;
-        result[i] = running_sum;
-    }
-
-    result
-}
-
-pub fn plot_rewards(rewards: &Vec<f32>, filename: &str, title: &str) {
+pub fn plot_rewards(rewards: &[f32], filename: &str, title: &str) {
     use plotters::prelude::*;
 
     let root = BitMapBackend::new(filename, (800, 600)).into_drawing_area();
@@ -44,7 +32,7 @@ pub fn plot_rewards(rewards: &Vec<f32>, filename: &str, title: &str) {
         .y_desc("Total Reward")
         .axis_desc_style(("Times New Roman", 22))
         .label_style(("Times New Roman", 18))
-        .light_line_style(&WHITE.mix(0.3))
+        .light_line_style(WHITE.mix(0.3))
         .draw()
         .unwrap();
 
@@ -55,12 +43,12 @@ pub fn plot_rewards(rewards: &Vec<f32>, filename: &str, title: &str) {
         ))
         .unwrap()
         .label("Reward")
-        .legend(|(x, y)| PathElement::new([(x, y), (x + 20, y)], &BLUE));
+        .legend(|(x, y)| PathElement::new([(x, y), (x + 20, y)], BLUE));
 
     chart
         .configure_series_labels()
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
+        .background_style(WHITE.mix(0.8))
+        .border_style(BLACK)
         .label_font(("Times New Roman", 18))
         .draw()
         .unwrap();

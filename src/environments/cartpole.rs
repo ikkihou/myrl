@@ -8,6 +8,12 @@ pub struct CartPole {
     pub step_count: usize,
 }
 
+impl Default for CartPole {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CartPole {
     pub fn new() -> Self {
         Self {
@@ -16,17 +22,25 @@ impl CartPole {
             step_count: 0,
         }
     }
+}
 
-    fn is_done(&self, state: &[f32; 4]) -> bool {
-        let x = state[0];
-        let theta = state[2];
-        x.abs() > 2.4 || theta.abs() > 12.0_f32.to_radians() || self.step_count >= self.step_limit
+impl Environment for CartPole {
+    type State = [f32; 4];
+    type Action = i64; // 0: left, 1: right
+    type Reward = f32;
+
+    fn reset(&mut self) -> Self::State {
+        self.state = [
+            random_range(-0.05..0.05),
+            random_range(-0.05..0.05),
+            random_range(-0.05..0.05),
+            random_range(-0.05..0.05),
+        ];
+        self.step_count = 0;
+        self.state
     }
 
-    pub fn step(
-        &mut self,
-        action: &<CartPole as Environment>::Action,
-    ) -> StepResult<<CartPole as Environment>::State, <CartPole as Environment>::Reward> {
+    fn step(&mut self, action: &Self::Action) -> StepResult<Self::State, Self::Reward> {
         let mut state = self.state;
 
         // 动力学参数
@@ -62,8 +76,9 @@ impl CartPole {
         self.step_count += 1;
         self.state = state;
 
-        // 判断是否结束
-        let done = self.is_done(&state);
+        let done = x.abs() > 2.4
+            || theta.abs() > 12.0_f32.to_radians()
+            || self.step_count >= self.step_limit;
 
         // 奖励函数
         let reward = 1.0 - (x.abs() / 2.4 + theta.abs() / 12.0_f32.to_radians());
@@ -73,28 +88,6 @@ impl CartPole {
             reward: if done { 0.0 } else { reward },
             done,
         }
-    }
-}
-
-impl Environment for CartPole {
-    type State = [f32; 4];
-    type Action = i64; // 0: left, 1: right
-    type Reward = f32;
-
-    fn reset(&mut self) -> Self::State {
-        // let mut rng = rng();
-        self.state = [
-            random_range(-0.05..0.05),
-            random_range(-0.05..0.05),
-            random_range(-0.05..0.05),
-            random_range(-0.05..0.05),
-        ];
-        self.step_count = 0;
-        self.state
-    }
-
-    fn step(&mut self, action: &Self::Action) -> StepResult<Self::State, Self::Reward> {
-        self.step(action)
     }
 
     fn current_state(&self) -> Self::State {

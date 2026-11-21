@@ -1,2 +1,9 @@
 [env]
+# 注意：torch-sys 0.15 的 build.rs 并不读 PYTHON（它硬编码找 `python3` / `python`），
+# 这行只对其他工具链有意义；libtorch 路径由 shell 里的 LIBTORCH 提供。
 PYTHON = "/Users/baoyihui/miniconda3/envs/torch_env/bin/python"
+# Xcode 16.3+ (Apple clang 21 / macOS 26+ SDK) 的 libc++ 把 std::is_arithmetic 等
+# 类型萃取标记为 _LIBCPP_NO_SPECIALIZATIONS，PyTorch 2.2 的头文件
+# c10/util/strong_type.h 仍在特化它们，默认报错 -Winvalid-specialization。
+# torch-sys 通过 cc crate 编译 libtch，cc 会读取 CXXFLAGS 并追加到编译命令。
+CXXFLAGS = "-Wno-invalid-specialization"

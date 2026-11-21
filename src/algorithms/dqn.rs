@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::os::macos::raw::stat;
 
 use crate::agent::Agent;
 use crate::environment::Environment;
@@ -7,17 +6,24 @@ use crate::networks::mlp::MLP;
 use crate::policy::Policy;
 use crate::utils::ToTensor;
 
-use rand::seq::IndexedRandom;
-use rand::{rng, Rng};
-use tch::nn::OptimizerConfig;
-use tch::{nn, Tensor};
-use tch::{nn::Module, Device};
+use rand::{Rng, rng};
+use tch::nn::{Module, OptimizerConfig};
+use tch::{Device, Kind, Tensor, nn};
 
 const MAX_REPLAY_BUFFER: usize = 10000;
+
+type Transition<E> = (
+    <E as Environment>::State,
+    <E as Environment>::Action,
+    f32,
+    <E as Environment>::State,
+    bool,
+);
+
 pub struct DqnAgent<E: Environment> {
     policy_net: MLP,
     target_net: MLP,
-    replay_buffer: VecDeque<(E::State, E::Action, f32, E::State, bool)>,
+    replay_buffer: VecDeque<Transition<E>>,
     gamma: f32,
     epsilon: f32,
     batch_size: usize,
@@ -41,14 +47,10 @@ where
         target_update_freq: usize,
         device: Device,
     ) -> Self {
-        let vs1 = nn::VarStore::new(device);
-        let vs2 = nn::VarStore::new(device);
-
-        let policy_net = MLP::new(vs1, state_dim, action_space);
-        let target_net = MLP::new(vs2, state_dim, action_space);
-
-        let opt = nn::Adam::default()
-            .build(policy_net.var_store(), 1e-3)
+        let policy_net = MLP::new(device, state_dim, action_space);
+        let target_net = MLP::new(device, state_dim, action_space);
+        let optimizer = nn::Adam::default()
+            .build(&policy_net.var_store, 1e-3)
             .unwrap();
 
         DqnAgent {
@@ -60,106 +62,77 @@ where
             batch_size,
             action_space,
             target_update_freq,
-            optimizer: opt,
+            optimizer,
             device,
         }
     }
 
     fn update_policy_network(&mut self) {
-        use tch::Kind;
-
-        // Sample minibatch
-        let minibatch: Vec<_> = self
-            .replay_buffer
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
-            .choose_multiple(&mut rng(), self.batch_size)
-            .cloned()
+        let buffer_len = self.replay_buffer.len();
+        let indices: Vec<usize> = rand::seq::index::sample(&mut rng(), buffer_len, self.batch_size)
+            .into_iter()
+            .collect();
+        let batch: Vec<_> = indices
+            .into_iter()
+            .map(|i| self.replay_buffer[i].clone())
             .collect();
 
-        let mut states = Vec::with_capacity(self.batch_size);
-        let mut actions = Vec::with_capacity(self.batch_size);
         let mut rewards = Vec::with_capacity(self.batch_size);
-        let mut next_states = Vec::with_capacity(self.batch_size);
         let mut dones = Vec::with_capacity(self.batch_size);
+        let mut actions = Vec::with_capacity(self.batch_size);
+        let mut state_tensors = Vec::with_capacity(self.batch_size);
+        let mut next_state_tensors = Vec::with_capacity(self.batch_size);
 
-        for (s, a, r, s_, d) in minibatch {
-            states.push(s);
-            actions.push(a);
-            rewards.push(r);
-            next_states.push(s_);
-            dones.push(d);
+        for (state, action, reward, next_state, done) in batch {
+            rewards.push(reward);
+            dones.push(if done { 1.0 } else { 0.0 });
+            actions.push(action.into());
+            state_tensors.push(state.to_tensor());
+            next_state_tensors.push(next_state.to_tensor());
         }
 
-        // Convert to tensors
-        let state_batch = Tensor::stack(
-            &states
-                .into_iter()
-                .map(|s| s.to_tensor())
-                .collect::<Vec<_>>(),
-            0,
-        )
-        .squeeze_dim(1)
-        .to(self.device);
-
-        let next_state_batch = Tensor::stack(
-            &next_states
-                .into_iter()
-                .map(|s| s.to_tensor())
-                .collect::<Vec<_>>(),
-            0,
-        )
-        .squeeze_dim(1)
-        .to(self.device);
-
-        let action_batch =
-            Tensor::from_slice(&actions.into_iter().map(|a| a.into()).collect::<Vec<_>>())
-                .to_device(self.device)
-                .unsqueeze(1);
-
-        let reward_batch = Tensor::from_slice(&rewards)
+        let state_batch = Tensor::stack(&state_tensors, 0)
+            .squeeze_dim(1)
+            .to(self.device);
+        let next_state_batch = Tensor::stack(&next_state_tensors, 0)
+            .squeeze_dim(1)
+            .to(self.device);
+        let action_batch = Tensor::from_slice(&actions)
             .to_device(self.device)
             .unsqueeze(1);
+        let reward_batch = Tensor::from_slice(&rewards).to_device(self.device);
+        let done_batch = Tensor::from_slice(&dones).to_device(self.device);
 
-        let done_batch = Tensor::from_slice(
-            &dones
-                .iter()
-                .map(|&d| if d { 1.0 } else { 0.0 })
-                .collect::<Vec<_>>(),
-        )
-        .to_device(self.device)
-        .unsqueeze(1);
-
-        // Compute current Q values
+        // Q(s, a): 当前网络对实际执行动作的 Q 值
         let q_values = self
             .policy_net
             .model
             .forward(&state_batch)
-            .gather(1, &action_batch, false);
+            .gather(1, &action_batch, false)
+            .squeeze_dim(1);
 
-        // Compute target Q values (no gradient)
-        let next_q_values = self
-            .target_net
-            .model
-            .forward(&next_state_batch)
-            .max_dim(1, false)
-            .0;
-
+        // 目标值 r + gamma * max_a' Q_target(s', a')，无梯度
+        let next_q_values = tch::no_grad(|| {
+            self.target_net
+                .model
+                .forward(&next_state_batch)
+                .max_dim(1, false)
+                .0
+        });
         let expected_q_values: Tensor =
-            &reward_batch + self.gamma * next_q_values.unsqueeze(1) * (1.0 - done_batch);
+            &reward_batch + self.gamma * next_q_values * (1.0 - done_batch);
 
-        // Compute loss
         let loss = (q_values - expected_q_values.detach())
             .pow_tensor_scalar(2.0)
             .mean(Kind::Float);
-
         self.optimizer.backward_step(&loss);
     }
 
     fn update_target_network(&mut self) {
-        let policy_state = self.policy_net.var_store();
-        self.target_net.var_store.copy(policy_state).unwrap();
+        self.target_net
+            .var_store
+            .copy(&self.policy_net.var_store)
+            .unwrap();
     }
 }
 
@@ -170,16 +143,17 @@ where
 {
     fn select_action(&self, state: &E::State) -> E::Action {
         let mut rng = rng();
-        if rand::random::<f32>() < self.epsilon {
-            let action = Rng::random_range(&mut rng, 0..self.action_space as i64);
-
-            E::Action::from(action)
+        if rng.random::<f32>() < self.epsilon {
+            E::Action::from(rng.random_range(0..self.action_space as i64))
         } else {
-            let state_tensor = &state.to_tensor();
-            let _no_grad_gurad = tch::no_grad_guard();
-            let action_tensor = self.policy_net.model.forward(&state_tensor.to(self.device));
-            let action: i64 = action_tensor.argmax(1, false).int64_value(&[0]);
-
+            let state_tensor = state.to_tensor().to(self.device);
+            let action = tch::no_grad(|| {
+                self.policy_net
+                    .model
+                    .forward(&state_tensor)
+                    .argmax(1, false)
+                    .int64_value(&[0])
+            });
             E::Action::from(action)
         }
     }
@@ -191,7 +165,7 @@ where
     E::Action: Into<i64> + From<i64> + Clone,
 {
     fn train(&mut self, env: &mut E, num_episodes: usize, if_plot: bool) {
-        let mut all_rewards: Vec<f32> = Vec::with_capacity(num_episodes);
+        let mut all_rewards = Vec::with_capacity(num_episodes);
 
         for episode in 0..num_episodes {
             let reward = self.train_episode(env);
@@ -203,7 +177,6 @@ where
             }
         }
 
-        // plot training rewards along episodes
         if if_plot {
             crate::utils::plot_rewards(&all_rewards, "dqn_training.png", "Training Reward");
         }
@@ -214,35 +187,30 @@ where
         let mut total_reward = 0.0;
 
         loop {
-            // select action
             let action = self.select_action(&state);
+            let result = env.step(&action);
+            total_reward += result.reward.into();
 
-            // execute action
-            let stepresult = env.step(&action);
-            total_reward += stepresult.reward.into();
-
-            // store memory
             if self.replay_buffer.len() >= MAX_REPLAY_BUFFER {
                 self.replay_buffer.pop_front();
             }
             self.replay_buffer.push_back((
                 state.clone(),
                 action.clone(),
-                stepresult.reward.into(),
-                stepresult.next_state.clone(),
-                stepresult.done,
+                result.reward.into(),
+                result.next_state.clone(),
+                result.done,
             ));
 
-            // update network
             if self.replay_buffer.len() >= self.batch_size {
                 self.update_policy_network();
             }
 
-            if stepresult.done {
+            if result.done {
                 break;
             }
 
-            state = stepresult.next_state.clone();
+            state = result.next_state.clone();
         }
 
         total_reward

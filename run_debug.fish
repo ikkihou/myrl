@@ -17,16 +17,18 @@ echo "✅ DYLD_LIBRARY_PATH 已设置为: $DYLD_LIBRARY_PATH"
 echo "📦 编译测试中..."
 cargo test --no-run
 
-# Step 4: 找到测试二进制路径
-set target_path (find target/debug/deps -type f -perm +111 -name "*integration_test*" | head -n 1)
+cargo test dqn_cart_pole_test
 
-if test -z "$target_path"
-    echo "❌ 未找到测试二进制文件"
-    exit 1
-end
+# # Step 4: 找到测试二进制路径
+# set target_path (find target/debug/deps -type f -perm +111 -name "*integration_test*" | head -n 1)
 
-echo "🐞 使用 lldb 调试 $target_path"
-echo "提示：在 lldb 中输入 `run dqn_cart_pole_test` 启动测试"
+# if test -z "$target_path"
+#     echo "❌ 未找到测试二进制文件"
+#     exit 1
+# end
 
-# Step 5: 启动 LLDB
-lldb $target_path
+# echo "🐞 使用 lldb 调试 $target_path"
+# echo "提示：在 lldb 中输入 `run dqn_cart_pole_test` 启动测试"
+
+# # Step 5: 启动 LLDB
+# lldb $target_path

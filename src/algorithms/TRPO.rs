@@ -1,11 +1,11 @@
 use crate::agent::Agent;
 use crate::environment::Environment;
+use crate::environments::cartpole::CartPole;
 use crate::networks::mlp::MLP;
-use crate::policy::Policy;
 use crate::utils::ToTensor;
 
 use tch::nn::{Module, OptimizerConfig};
-use tch::{nn, Device, Kind, Tensor};
+use tch::{Device, Kind, Tensor, nn};
 
 const MAX_BATCH_STEPS: usize = 2048;
 const VALUE_EPOCHS: usize = 10;
@@ -23,7 +23,7 @@ struct TrajectoryBatch {
     episode_rewards: Vec<f32>,
 }
 
-pub struct TrpoAgent<E: Environment> {
+pub struct TrpoAgent {
     policy_net: MLP,
     value_net: MLP,
     value_opt: nn::Optimizer,
@@ -32,14 +32,9 @@ pub struct TrpoAgent<E: Environment> {
     max_kl: f32,
     damping: f32,
     device: Device,
-    _marker: std::marker::PhantomData<E>,
 }
 
-impl<E: Environment<Reward = f32>> TrpoAgent<E>
-where
-    E::State: Clone + ToTensor,
-    E::Action: Into<i64> + From<i64> + Clone,
-{
+impl TrpoAgent {
     pub fn new(
         state_dim: usize,
         action_space: usize,
@@ -49,13 +44,10 @@ where
         damping: f32,
         device: Device,
     ) -> Self {
-        let policy_vs = nn::VarStore::new(device);
-        let value_vs = nn::VarStore::new(device);
-
-        let policy_net = MLP::new(policy_vs, state_dim, action_space);
-        let value_net = MLP::new(value_vs, state_dim, 1);
+        let policy_net = MLP::new(device, state_dim, action_space);
+        let value_net = MLP::new(device, state_dim, 1);
         let value_opt = nn::Adam::default()
-            .build(value_net.var_store(), VALUE_LR)
+            .build(&value_net.var_store, VALUE_LR)
             .unwrap();
 
         Self {
@@ -67,30 +59,24 @@ where
             max_kl,
             damping,
             device,
-            _marker: std::marker::PhantomData,
         }
     }
 
-    fn sample_action(&self, state: &E::State) -> (E::Action, Tensor) {
+    fn sample_action(&self, state: &[f32; 4]) -> (i64, Tensor) {
         let state_tensor = state.to_tensor().to_device(self.device);
         let logits = self.policy_net.model.forward(&state_tensor);
-        let probs = logits.softmax(-1, Kind::Float);
-        let action_tensor = probs.multinomial(1, true);
+        let action_tensor = logits.softmax(-1, Kind::Float).multinomial(1, true);
         let action = action_tensor.int64_value(&[0, 0]);
         let log_prob = logits
             .log_softmax(-1, Kind::Float)
             .gather(1, &action_tensor, false)
             .squeeze();
-        (E::Action::from(action), log_prob.detach())
+        (action, log_prob.detach())
     }
 
-    fn predict_value_tensor(&self, states: &Tensor) -> Tensor {
-        self.value_net.model.forward(states).squeeze_dim(-1)
-    }
-
-    fn predict_value(&self, state: &E::State) -> f32 {
-        let value =
-            tch::no_grad(|| self.predict_value_tensor(&state.to_tensor().to_device(self.device)));
+    fn predict_value(&self, state: &[f32; 4]) -> f32 {
+        let state_tensor = state.to_tensor().to_device(self.device);
+        let value = tch::no_grad(|| self.value_net.model.forward(&state_tensor));
         value.double_value(&[0]) as f32
     }
 
@@ -117,10 +103,10 @@ where
         let advantages = Tensor::from_slice(&advantages);
         let mean = advantages.mean(Kind::Float);
         let std = advantages.std(true);
-        ((advantages - mean) / (std + 1e-8)).to_kind(Kind::Float)
+        (advantages - mean) / (std + 1e-8)
     }
 
-    fn collect_trajectories(&self, env: &mut E) -> TrajectoryBatch {
+    fn collect_trajectories(&mut self, env: &mut CartPole) -> TrajectoryBatch {
         let mut state_tensors = Vec::new();
         let mut actions = Vec::new();
         let mut log_probs = Vec::new();
@@ -147,7 +133,7 @@ where
 
                 episode_reward += step_result.reward;
                 episode_states.push(state_tensor);
-                episode_actions.push(action.into());
+                episode_actions.push(action);
                 episode_log_probs.push(log_prob);
                 episode_rewards_buffer.push(step_result.reward);
                 episode_values.push(value);
@@ -342,9 +328,10 @@ where
     }
 
     fn update_value_function(&mut self, states: &Tensor, returns: &Tensor) {
+        let target = returns.squeeze_dim(-1);
         for _ in 0..VALUE_EPOCHS {
-            let values = self.predict_value_tensor(states);
-            let loss = (values - returns).pow_tensor_scalar(2.0).mean(Kind::Float);
+            let values = self.value_net.model.forward(states).squeeze_dim(-1);
+            let loss = (values - &target).pow_tensor_scalar(2.0).mean(Kind::Float);
             self.value_opt.backward_step(&loss);
         }
     }
@@ -393,29 +380,10 @@ where
             old_objective,
         );
     }
-
-    fn update(&mut self, batch: &TrajectoryBatch) {
-        self.update_value_function(&batch.states, &batch.returns);
-        self.update_policy(batch);
-    }
 }
 
-impl<E: Environment<Reward = f32>> Policy<E::State, E::Action> for TrpoAgent<E>
-where
-    E::State: Clone + ToTensor,
-    E::Action: Into<i64> + From<i64> + Clone,
-{
-    fn select_action(&self, state: &E::State) -> E::Action {
-        self.sample_action(state).0
-    }
-}
-
-impl<E: Environment<Reward = f32>> Agent<E> for TrpoAgent<E>
-where
-    E::State: Clone + ToTensor,
-    E::Action: Into<i64> + From<i64> + Clone,
-{
-    fn train(&mut self, env: &mut E, num_episodes: usize, if_plot: bool) {
+impl Agent<CartPole> for TrpoAgent {
+    fn train(&mut self, env: &mut CartPole, num_episodes: usize, if_plot: bool) {
         let mut all_rewards = Vec::with_capacity(num_episodes);
 
         for episode in 0..num_episodes {
@@ -424,7 +392,8 @@ where
                 batch.episode_rewards.iter().sum::<f32>() / batch.episode_rewards.len() as f32;
             println!("Episode {episode}: total reward = {mean_reward}");
             all_rewards.push(mean_reward);
-            self.update(&batch);
+            self.update_value_function(&batch.states, &batch.returns);
+            self.update_policy(&batch);
         }
 
         if if_plot {
@@ -432,7 +401,12 @@ where
         }
     }
 
-    fn train_episode(&mut self, _env: &mut E) -> f32 {
-        unimplemented!("TRPO updates on trajectory batches, use train instead")
+    fn train_episode(&mut self, env: &mut CartPole) -> f32 {
+        let batch = self.collect_trajectories(env);
+        let mean_reward =
+            batch.episode_rewards.iter().sum::<f32>() / batch.episode_rewards.len() as f32;
+        self.update_value_function(&batch.states, &batch.returns);
+        self.update_policy(&batch);
+        mean_reward
     }
 }
