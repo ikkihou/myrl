@@ -1,22 +1,27 @@
-use crate::agent::Agent;
 use crate::environment::Environment;
-use crate::environments::cartpole::CartPole;
 use crate::networks::mlp::MLP;
+use crate::policy::Policy;
+use crate::train::Train;
 use crate::utils::ToTensor;
 
 use tch::nn::{Module, OptimizerConfig};
 use tch::{Device, IndexOp, Kind, Tensor, nn};
 
-pub struct A2CAgent {
+pub struct A2CAgent<E: Environment> {
     actor_net: MLP,
     critic_net: MLP,
     actor_opt: nn::Optimizer,
     critic_opt: nn::Optimizer,
     gamma: f32,
     device: Device,
+    _marker: std::marker::PhantomData<E>,
 }
 
-impl A2CAgent {
+impl<E: Environment> A2CAgent<E>
+where
+    E::State: ToTensor,
+    E::Action: From<i64>,
+{
     pub fn new(state_dim: usize, action_space: usize, gamma: f32, device: Device) -> Self {
         let actor_net = MLP::new(device, state_dim, action_space);
         let critic_net = MLP::new(device, state_dim, 1);
@@ -35,12 +40,33 @@ impl A2CAgent {
             critic_opt,
             gamma,
             device,
+            _marker: std::marker::PhantomData,
         }
     }
 }
 
-impl Agent<CartPole> for A2CAgent {
-    fn train(&mut self, env: &mut CartPole, num_episodes: usize, if_plot: bool) {
+impl<E: Environment> Policy<E::State, E::Action> for A2CAgent<E>
+where
+    E::State: ToTensor,
+    E::Action: From<i64>,
+{
+    fn select_action(&self, state: &E::State) -> E::Action {
+        let state_tensor = state.to_tensor().to(self.device);
+        let logits = self.actor_net.model.forward(&state_tensor);
+        let action = logits
+            .softmax(-1, Kind::Float)
+            .multinomial(1, true)
+            .int64_value(&[0]);
+        E::Action::from(action)
+    }
+}
+
+impl<E: Environment> Train<E> for A2CAgent<E>
+where
+    E::State: ToTensor,
+    E::Action: From<i64>,
+{
+    fn train(&mut self, env: &mut E, num_episodes: usize) -> Vec<f32> {
         let mut all_rewards = Vec::with_capacity(num_episodes);
 
         for episode in 0..num_episodes {
@@ -49,12 +75,10 @@ impl Agent<CartPole> for A2CAgent {
             all_rewards.push(reward);
         }
 
-        if if_plot {
-            crate::utils::plot_rewards(&all_rewards, "a2c_training.png", "Training Reward");
-        }
+        all_rewards
     }
 
-    fn train_episode(&mut self, env: &mut CartPole) -> f32 {
+    fn train_episode(&mut self, env: &mut E) -> f32 {
         let mut state = env.reset();
         let mut total_reward = 0.0;
 
@@ -66,8 +90,8 @@ impl Agent<CartPole> for A2CAgent {
                 .multinomial(1, true)
                 .int64_value(&[0]);
 
-            let result = env.step(&action);
-            total_reward += result.reward;
+            let result = env.step(&E::Action::from(action));
+            total_reward += result.reward.into();
 
             // TD target: r + gamma * V(s')，终止时为 r
             let next_state_value = if result.done {
@@ -77,7 +101,7 @@ impl Agent<CartPole> for A2CAgent {
                 tch::no_grad(|| self.critic_net.model.forward(&next_state_tensor))
             };
             let td_target = tch::no_grad(|| {
-                &Tensor::from(result.reward as f64) + self.gamma * next_state_value
+                &Tensor::from(result.reward.into() as f64) + self.gamma * next_state_value
             });
 
             let state_value = self.critic_net.model.forward(&state_tensor);

@@ -1,11 +1,10 @@
 use std::collections::VecDeque;
 
-use crate::agent::Agent;
 use crate::environment::Environment;
 use crate::networks::mlp::MLP;
 use crate::policy::Policy;
+use crate::train::Train;
 use crate::utils::ToTensor;
-
 use rand::{Rng, rng};
 use tch::nn::{Module, OptimizerConfig};
 use tch::{Device, Kind, Tensor, nn};
@@ -159,12 +158,12 @@ where
     }
 }
 
-impl<E: Environment> Agent<E> for DqnAgent<E>
+impl<E: Environment> Train<E> for DqnAgent<E>
 where
     E::State: Clone + ToTensor,
     E::Action: Into<i64> + From<i64> + Clone,
 {
-    fn train(&mut self, env: &mut E, num_episodes: usize, if_plot: bool) {
+    fn train(&mut self, env: &mut E, num_episodes: usize) -> Vec<f32> {
         let mut all_rewards = Vec::with_capacity(num_episodes);
 
         for episode in 0..num_episodes {
@@ -177,9 +176,7 @@ where
             }
         }
 
-        if if_plot {
-            crate::utils::plot_rewards(&all_rewards, "dqn_training.png", "Training Reward");
-        }
+        all_rewards
     }
 
     fn train_episode(&mut self, env: &mut E) -> f32 {

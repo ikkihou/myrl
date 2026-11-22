@@ -8,12 +8,6 @@ pub struct CartPole {
     pub step_count: usize,
 }
 
-impl Default for CartPole {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl CartPole {
     pub fn new() -> Self {
         Self {
@@ -21,6 +15,12 @@ impl CartPole {
             step_limit: 200,
             step_count: 0,
         }
+    }
+}
+
+impl Default for CartPole {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

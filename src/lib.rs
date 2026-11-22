@@ -1,9 +1,10 @@
 pub mod algorithms;
 pub mod environments;
 pub mod networks;
+pub mod plot;
 pub mod utils;
 
-// Traits
-pub mod agent;
+// Core traits
 pub mod environment;
 pub mod policy;
+pub mod train;

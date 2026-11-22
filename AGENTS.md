@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`src/` contains the library crate. Core traits live in `src/agent.rs`, `src/environment.rs`, and `src/policy.rs`. Algorithm implementations are grouped under `src/algorithms/` (`dqn.rs`, `a2c.rs`, `policy_gradient.rs`, `TRPO.rs`), reusable models under `src/networks/`, and policies under `src/policies/`. Built-in environments are in `src/environments/`, currently `cartpole.rs`. Cross-cutting helpers such as plotting and tensor conversion live in `src/utils.rs`. Integration coverage sits in `tests/integration_test.rs`. Training plots and other reference images are stored in `assets/`.
+`src/` contains the library crate. Core traits live in `src/environment.rs`, `src/policy.rs`, and `src/train.rs`. Algorithm implementations are grouped under `src/algorithms/` (`dqn.rs`, `a2c.rs`, `policy_gradient.rs`, `trpo.rs`), all generic over any `Environment`. Reusable models live under `src/networks/`. Built-in environments are in `src/environments/`, currently `cartpole.rs`. Tensor conversion helpers live in `src/utils.rs` and plotting in `src/plot.rs` — algorithms return reward vectors from `Train::train` and callers decide whether to plot. Integration coverage sits in `tests/integration_test.rs`. Training plots and other reference images are stored in `assets/`.
 
 ## Build, Test, and Development Commands
 Use Cargo for the standard workflow:

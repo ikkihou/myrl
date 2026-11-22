@@ -1,7 +1,7 @@
-use crate::agent::Agent;
 use crate::environment::Environment;
-use crate::environments::cartpole::CartPole;
 use crate::networks::mlp::MLP;
+use crate::policy::Policy;
+use crate::train::Train;
 use crate::utils::ToTensor;
 
 use tch::nn::{Module, OptimizerConfig};
@@ -23,7 +23,7 @@ struct TrajectoryBatch {
     episode_rewards: Vec<f32>,
 }
 
-pub struct TrpoAgent {
+pub struct TrpoAgent<E: Environment> {
     policy_net: MLP,
     value_net: MLP,
     value_opt: nn::Optimizer,
@@ -32,9 +32,14 @@ pub struct TrpoAgent {
     max_kl: f32,
     damping: f32,
     device: Device,
+    _marker: std::marker::PhantomData<E>,
 }
 
-impl TrpoAgent {
+impl<E: Environment> TrpoAgent<E>
+where
+    E::State: ToTensor,
+    E::Action: From<i64>,
+{
     pub fn new(
         state_dim: usize,
         action_space: usize,
@@ -59,10 +64,11 @@ impl TrpoAgent {
             max_kl,
             damping,
             device,
+            _marker: std::marker::PhantomData,
         }
     }
 
-    fn sample_action(&self, state: &[f32; 4]) -> (i64, Tensor) {
+    fn sample_action(&self, state: &E::State) -> (i64, Tensor) {
         let state_tensor = state.to_tensor().to_device(self.device);
         let logits = self.policy_net.model.forward(&state_tensor);
         let action_tensor = logits.softmax(-1, Kind::Float).multinomial(1, true);
@@ -74,7 +80,7 @@ impl TrpoAgent {
         (action, log_prob.detach())
     }
 
-    fn predict_value(&self, state: &[f32; 4]) -> f32 {
+    fn predict_value(&self, state: &E::State) -> f32 {
         let state_tensor = state.to_tensor().to_device(self.device);
         let value = tch::no_grad(|| self.value_net.model.forward(&state_tensor));
         value.double_value(&[0]) as f32
@@ -106,7 +112,7 @@ impl TrpoAgent {
         (advantages - mean) / (std + 1e-8)
     }
 
-    fn collect_trajectories(&mut self, env: &mut CartPole) -> TrajectoryBatch {
+    fn collect_trajectories(&mut self, env: &mut E) -> TrajectoryBatch {
         let mut state_tensors = Vec::new();
         let mut actions = Vec::new();
         let mut log_probs = Vec::new();
@@ -129,13 +135,14 @@ impl TrpoAgent {
                 let state_tensor = state.to_tensor().to_device(self.device).squeeze_dim(0);
                 let value = self.predict_value(&state);
                 let (action, log_prob) = self.sample_action(&state);
-                let step_result = env.step(&action);
+                let env_action = E::Action::from(action);
+                let step_result = env.step(&env_action);
 
-                episode_reward += step_result.reward;
+                episode_reward += step_result.reward.into();
                 episode_states.push(state_tensor);
                 episode_actions.push(action);
                 episode_log_probs.push(log_prob);
-                episode_rewards_buffer.push(step_result.reward);
+                episode_rewards_buffer.push(step_result.reward.into());
                 episode_values.push(value);
 
                 state = step_result.next_state;
@@ -382,8 +389,22 @@ impl TrpoAgent {
     }
 }
 
-impl Agent<CartPole> for TrpoAgent {
-    fn train(&mut self, env: &mut CartPole, num_episodes: usize, if_plot: bool) {
+impl<E: Environment> Policy<E::State, E::Action> for TrpoAgent<E>
+where
+    E::State: ToTensor,
+    E::Action: From<i64>,
+{
+    fn select_action(&self, state: &E::State) -> E::Action {
+        E::Action::from(self.sample_action(state).0)
+    }
+}
+
+impl<E: Environment> Train<E> for TrpoAgent<E>
+where
+    E::State: ToTensor,
+    E::Action: From<i64>,
+{
+    fn train(&mut self, env: &mut E, num_episodes: usize) -> Vec<f32> {
         let mut all_rewards = Vec::with_capacity(num_episodes);
 
         for episode in 0..num_episodes {
@@ -396,12 +417,10 @@ impl Agent<CartPole> for TrpoAgent {
             self.update_policy(&batch);
         }
 
-        if if_plot {
-            crate::utils::plot_rewards(&all_rewards, "trpo_training.png", "Training Reward");
-        }
+        all_rewards
     }
 
-    fn train_episode(&mut self, env: &mut CartPole) -> f32 {
+    fn train_episode(&mut self, env: &mut E) -> f32 {
         let batch = self.collect_trajectories(env);
         let mean_reward =
             batch.episode_rewards.iter().sum::<f32>() / batch.episode_rewards.len() as f32;
