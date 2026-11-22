@@ -67,11 +67,13 @@ fn ppo_cart_pole_test() {
     let mut agent = PPOAgent::<CartPole>::new(
         env.state_dim(),
         env.action_space(),
-        1e-4,
+        3e-4,
         1e-4,
         0.99,
         0.97,
         0.2,
         device,
     );
+    let rewards = agent.train(&mut env, 200);
+    plot_rewards(&rewards, "ppo_training.png", "PPO CartPole Training");
 }
